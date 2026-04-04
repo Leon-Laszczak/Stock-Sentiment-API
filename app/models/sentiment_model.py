@@ -39,7 +39,7 @@ class SentimentAnalyzer:
 
     def __init__(self, model_dir: str, device: str = "auto"):
         self.tokenizer = AutoTokenizer.from_pretrained(model_dir)
-        self.model = AutoModelForSequenceClassification.from_pretrained(model_dir, torch_dtype=torch.float16)
+        self.model = AutoModelForSequenceClassification.from_pretrained(model_dir, dtype=torch.float16)
 
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
