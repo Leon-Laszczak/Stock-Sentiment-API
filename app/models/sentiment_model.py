@@ -23,6 +23,7 @@ import logging as log
 MAX_LENGTH = 256
 LABEL2ID = {"negative": 0, "neutral": 1, "positive": 2}
 ID2LABEL = {v: k for k, v in LABEL2ID.items()}
+torch.set_num_threads(1)
 
 class SentimentAnalyzer:
     """
@@ -140,6 +141,9 @@ def predict_sentiment_scores(
     text_list = list(texts)
     if not text_list:
         return 0.0, []
+
+    MAX_NEWS = 10
+    text_list = text_list[:MAX_NEWS]
 
     if tier == 'free':
         model = get_free_model()
