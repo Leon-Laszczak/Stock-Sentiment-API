@@ -25,7 +25,7 @@ def get_sentiment(ticker: str, _ : None = Depends(rate_limiter)):
 
     news = score_news_for_ticker(ticker)
 
-    overall_sentiment = get_final_score(tech['Score'], news['Score'], fund['Score'])
+    overall_sentiment = get_final_score(tech['Score'], news['score'], fund['Score'])
 
     return {
         'ticker' : ticker,

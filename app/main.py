@@ -3,7 +3,7 @@ from fastapi import FastAPI
 from app.api.sentiment import router as sentiment_router
 from app.api.components import router as components_router
 
-app = FastAPI(title="Stock Sentiment API", description="API to compute stock sentiment scores based on technical indicators.")
+app = FastAPI(title="Stock Sentiment API", description="API to compute stock sentiment scores.")
 app.include_router(sentiment_router, prefix="/sentiment")
 app.include_router(components_router, prefix="/components")
 
