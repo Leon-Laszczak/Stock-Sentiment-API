@@ -137,25 +137,5 @@ def predict_sentiment_scores(
     tier: str = 'free',
     model_path: str | Path | None = None,
 ) -> tuple[float, list[dict]]:
-    """Predict sentiment scores and return the aggregate mean with per-text results."""
-    text_list = list(texts)
-    if not text_list:
-        return 0.0, []
-
-    MAX_NEWS = 10
-    text_list = text_list[:MAX_NEWS]
-
-    if tier == 'free':
-        model = get_free_model()
-        results = model.analyze_batch(text_list)
-        model = None
-    else:
-        resolved_model_path = Path(model_path) if model_path is not None else Path(f'./models/{tier}')
-        analyzer = SentimentAnalyzer(model_dir=str(resolved_model_path))
-        results = analyzer.analyze_batch(text_list)
-
-    if not results:
-        return 0.0, []
-
-    mean_score = float(np.array([res['score'] for res in results], dtype=float).mean())
-    return mean_score, results
+    """Placeholder function to predict sentiment scores for a list of texts."""
+    return 0.0,[]
