@@ -108,6 +108,16 @@ def score_news_dataframe(
 
     tier = 'free'
     score,results = predict_sentiment_scores(text_list, tier=tier)
+    for r in results:
+        if 'error' in r:
+            return {
+                'score': 0.0,
+                'has_data': False,
+                'article_count': len(text_list),
+                'distinct_sources': distinct_sources,
+                'latest_pub_date': latest_pub_date,
+                'error': r['error'],
+            }
 
     components = {str(idx) : {'score' : r['score'],'pub_date' : str(pd.to_datetime(news['pub_date'], errors='coerce', utc=True)[idx]),'source' : providers[idx]} for (idx,r) in enumerate(results)} 
     return {
@@ -126,6 +136,16 @@ def score_news_for_ticker(
     try:
         news = fetch_news(ticker)
         result = score_news_dataframe(news)
+        if 'error' in result:
+            return {
+                'ticker': ticker,
+                'score': 0.0,
+                'has_data': False,
+                'article_count': 0,
+                'distinct_sources': 0,
+                'latest_pub_date': None,
+                'error': result['error'],
+            }
         result['ticker'] = ticker
         return result
     except Exception as exc:
