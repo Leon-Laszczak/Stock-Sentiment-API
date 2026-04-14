@@ -6,3 +6,5 @@ pandas-ta
 numpy
 torch
 transformers
+optimum[onnxruntime]
+onnxruntime
