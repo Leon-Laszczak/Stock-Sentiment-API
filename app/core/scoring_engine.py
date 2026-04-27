@@ -96,9 +96,9 @@ def technical_score(dfs):
             'error': str(exc),
         }
 
-def fundamental_score(ticker: str):
+def fundamental_score(ticker: str, ticker_obj: yf.Ticker | None = None):
     try:
-        t = yf.Ticker(ticker)
+        t = ticker_obj or yf.Ticker(ticker)
 
         revenue = analyze_revenue(t)
         income = analyze_income_and_margins(t)

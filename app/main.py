@@ -6,18 +6,10 @@ from fastapi import FastAPI
 from app.api.sentiment import router as sentiment_router
 from app.models.sentiment_model import warm_up_sentiment_model
 
-try:
-    from app.api.components import router as components_router
-except ImportError:
-    components_router = None
-
 log = logging.getLogger(__name__)
 
 app = FastAPI(title="Stock Sentiment API", description="API to compute stock sentiment scores.")
 app.include_router(sentiment_router, prefix="/sentiment")
-if components_router is not None:
-    app.include_router(components_router, prefix="/components")
-
 
 def _env_truthy(name: str, default: str = "1") -> bool:
     return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off"}
