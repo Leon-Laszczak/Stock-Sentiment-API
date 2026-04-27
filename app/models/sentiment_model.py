@@ -11,8 +11,12 @@ from typing import Iterable
 
 import numpy as np
 
+os.environ.setdefault("USE_TF", "0")
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+
 MAX_LENGTH = 128
 DEFAULT_MODEL_ID = "Leon-Laszczak/news_classification_free_quantized"
+WARMUP_TEXT = "Stocks are stable today."
 
 
 def _softmax(x: np.ndarray) -> np.ndarray:
@@ -131,3 +135,11 @@ def predict_sentiment_scores(
         return avg_score, results
     except Exception as exc:
         return 0.0, [{"error": str(exc)}]
+
+
+def warm_up_sentiment_model(model_path: str | Path | None = None) -> str:
+    """Load the analyzer eagerly so the first request does not pay model startup cost."""
+    resolved_model_dir = _resolve_model_dir(model_path=model_path)
+    analyzer = _get_analyzer(resolved_model_dir)
+    analyzer.analyze_batch([WARMUP_TEXT], batch_size=1)
+    return resolved_model_dir

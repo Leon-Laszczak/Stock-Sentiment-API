@@ -10,7 +10,9 @@ from app.models.sentiment_model import predict_sentiment_scores
 
 cache = {}
 last_fetch = {}
-CACHE_TTL = 60 * 60 * 24 # 1 day
+score_cache = {}
+score_last_fetch = {}
+CACHE_TTL = 60 * 60 * 4 # 4 hours
 
 def _empty_news_df() -> pd.DataFrame:
     return pd.DataFrame(columns=['title', 'summary', 'pub_date', 'provider'])
@@ -134,6 +136,12 @@ def score_news_for_ticker(
 ) -> dict[str, Any]:
     """Download news and return aggregate sentiment score for one ticker."""
     try:
+        now = time.time()
+        ticker_key = ticker.upper()
+        if ticker_key in score_cache and ticker_key in score_last_fetch:
+            if now - score_last_fetch[ticker_key] < CACHE_TTL:
+                return score_cache[ticker_key]
+
         news = fetch_news(ticker)
         result = score_news_dataframe(news)
         if 'error' in result:
@@ -147,6 +155,8 @@ def score_news_for_ticker(
                 'error': result['error'],
             }
         result['ticker'] = ticker
+        score_cache[ticker_key] = result
+        score_last_fetch[ticker_key] = now
         return result
     except Exception as exc:
         return {
