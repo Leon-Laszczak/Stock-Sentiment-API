@@ -1,14 +1,12 @@
-# Stock Sentiment API (MVP)
+# Stock Sentiment API
 
-A simple API that estimates stock sentiment from three sources:
+Local FastAPI application for stock sentiment analysis. The project combines:
 
 - technical indicators
 - company fundamentals
-- recent news
+- recent news scored by a locally loaded news sentiment model
 
-Provide a ticker -> get one overall score plus a full breakdown.
-
----
+The news model is now part of this application flow, so you do not need a separate News API service to use it.
 
 ## What It Does
 
@@ -16,15 +14,13 @@ For a ticker like `AAPL`, the API combines:
 
 - Technical score from `RSI`, `MACD`, and `EMA`
 - Fundamental score from revenue, margins, EPS, and analyst expectations
-- News score from recent headlines and summaries using the local model in `models/free`
+- News score from recent headlines and summaries analyzed inside this app
 
 Final score weights:
 
 - `40%` fundamentals
 - `30%` technicals
 - `30%` news
-
----
 
 ## Example
 
@@ -63,13 +59,11 @@ Response:
 }
 ```
 
----
-
 ## Endpoints
 
 `GET /`
 
-Basic health check.
+Basic local status check.
 
 `GET /sentiment/{ticker}`
 
@@ -83,31 +77,39 @@ Returns only the technical score and its breakdown.
 
 Returns only the fundamental score and its breakdown.
 
----
+`GET /components/news/{ticker}`
 
-## Getting Started
+Returns only the news sentiment component.
+
+## Local Setup
 
 ```bash
 pip install -r requirements.txt
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-Open:
+Open locally:
 
 - Docs: `http://127.0.0.1:8000/docs`
 - Health check: `http://127.0.0.1:8000/`
 - Example: `http://127.0.0.1:8000/sentiment/AAPL`
 
----
+## News Model
+
+The app loads the news sentiment model directly inside `app/models/sentiment_model.py`.
+
+- Preferred local path: `models/news_classification_free_quantized`
+- Optional override: set `NEWS_SENTIMENT_MODEL_PATH`
+- Fallback: if no local folder is present, the configured Hugging Face model identifier is used and cached locally by the libraries on first load
+
+This means the sentiment inference runs locally in the same process as the API instead of calling a separate hosted sentiment endpoint.
 
 ## Project Structure
 
 - `app/api` - API routes
 - `app/data` - market, fundamentals, and news data collection
 - `app/core` - scoring logic and helper functions
-- `app/models` - sentiment model wrapper
-
----
+- `app/models` - local news sentiment model wrapper
 
 ## Notes
 
@@ -115,20 +117,8 @@ Open:
 - The app uses simple in-memory caching to reduce repeated fetches
 - Rate limit is `10 request / second / IP`
 - If Yahoo Finance is rate limited or data is missing, some components may return fallback values
+- This project is intended for local use
 - This is an MVP and not financial advice
-
----
-
-## Feedback
-
-I am looking for feedback on:
-
-- Is the output easy to understand?
-- Does the score breakdown feel useful?
-- Which component matters most to you: technicals, fundamentals, or news?
-- What would make this API worth using again?
-
----
 
 ## License
 
