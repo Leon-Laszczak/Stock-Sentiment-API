@@ -6,5 +6,5 @@ pandas-ta
 numpy
 torch
 transformers
-optimum[onnxruntime]
-onnxruntime
+huggingface-hub
+llama-cpp-python

@@ -98,11 +98,17 @@ Open locally:
 
 The app loads the news sentiment model directly inside `app/models/sentiment_model.py`.
 
-- Preferred local path: `models/news_classification_free_quantized`
-- Optional override: set `NEWS_SENTIMENT_MODEL_PATH`
-- Fallback: if no local folder is present, the configured Hugging Face model identifier is used and cached locally by the libraries on first load
+- Primary model: `Ayansk11/FinSenti-Qwen3-8B-GGUF`
+- Default quant: `FinSenti-Qwen3-8B.Q4_K_M.gguf`
+- Fallback model: `ProsusAI/finbert`
+- Preferred local primary path: `models/finsenti-qwen3-8b-gguf`
+- Backward-compatible override: set `NEWS_SENTIMENT_MODEL_PATH`
+- Optional primary overrides: `NEWS_SENTIMENT_PRIMARY_MODEL_PATH`, `NEWS_SENTIMENT_PRIMARY_MODEL_ID`, `NEWS_SENTIMENT_PRIMARY_MODEL_FILENAME`
+- Optional fallback overrides: `NEWS_SENTIMENT_FALLBACK_MODEL_PATH`, `NEWS_SENTIMENT_FALLBACK_MODEL_ID`
 
 This means the sentiment inference runs locally in the same process as the API instead of calling a separate hosted sentiment endpoint.
+
+On first Qwen load the app can download the selected GGUF file from Hugging Face if it is not already present locally. If the GGUF model cannot be loaded or its inference fails, the app automatically falls back to FinBERT.
 
 ## Project Structure
 
@@ -117,6 +123,7 @@ This means the sentiment inference runs locally in the same process as the API i
 - The app uses simple in-memory caching to reduce repeated fetches
 - Rate limit is `10 request / second / IP`
 - If Yahoo Finance is rate limited or data is missing, some components may return fallback values
+- Qwen GGUF inference uses `llama-cpp-python`, so the first model download is several GB
 - This project is intended for local use
 - This is an MVP and not financial advice
 
