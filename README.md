@@ -105,10 +105,14 @@ The app loads the news sentiment model directly inside `app/models/sentiment_mod
 - Backward-compatible override: set `NEWS_SENTIMENT_MODEL_PATH`
 - Optional primary overrides: `NEWS_SENTIMENT_PRIMARY_MODEL_PATH`, `NEWS_SENTIMENT_PRIMARY_MODEL_ID`, `NEWS_SENTIMENT_PRIMARY_MODEL_FILENAME`
 - Optional fallback overrides: `NEWS_SENTIMENT_FALLBACK_MODEL_PATH`, `NEWS_SENTIMENT_FALLBACK_MODEL_ID`
+- Analyzer mode override: `NEWS_SENTIMENT_ANALYZER=auto|qwen|finbert`
+- Qwen response budget override: `NEWS_SENTIMENT_QWEN_MAX_TOKENS=48`
 
 This means the sentiment inference runs locally in the same process as the API instead of calling a separate hosted sentiment endpoint.
 
 On first Qwen load the app can download the selected GGUF file from Hugging Face if it is not already present locally. If the GGUF model cannot be loaded or its inference fails, the app automatically falls back to FinBERT.
+
+If you want the fastest response time, set `NEWS_SENTIMENT_ANALYZER=finbert`. The Qwen path is heavier but can still be used when you want the larger local LLM.
 
 ## Project Structure
 

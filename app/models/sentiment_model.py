@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging as log
 import os
 import re
@@ -20,7 +21,7 @@ DEFAULT_PRIMARY_MODEL_ID = "Ayansk11/FinSenti-Qwen3-8B-GGUF"
 DEFAULT_PRIMARY_MODEL_FILENAME = "FinSenti-Qwen3-8B.Q4_K_M.gguf"
 DEFAULT_FALLBACK_MODEL_ID = "ProsusAI/finbert"
 WARMUP_TEXT = "Stocks are stable today."
-QWEN_MAX_TOKENS = 160
+QWEN_MAX_TOKENS = 48
 DEFAULT_QWEN_LOCAL_DIRS = (
     "finsenti-qwen3-8b-gguf",
     "news_sentiment_qwen3_8b_gguf",
@@ -36,16 +37,17 @@ SCORE_BY_LABEL = {
     "positive": 1.0,
 }
 QWEN_SYSTEM_PROMPT = (
-    "You are a financial sentiment analyst. For each headline you receive, "
-    "write a short reasoning chain inside <reasoning>...</reasoning> tags, "
-    "then give a single label inside <answer>...</answer> tags. The label "
-    "must be exactly one of: positive, negative, neutral."
+    "You are a financial sentiment analyst. Classify the user's text and "
+    "respond with JSON only, using exactly these keys: "
+    '{"negative": number, "neutral": number, "positive": number}. '
+    "Each value must be between 0 and 1, and the three values must sum to 1."
 )
 QWEN_ANSWER_PATTERN = re.compile(
     r"<answer>\s*(positive|negative|neutral)\s*</answer>",
     re.IGNORECASE,
 )
 LABEL_PATTERN = re.compile(r"\b(positive|negative|neutral)\b", re.IGNORECASE)
+QWEN_JSON_PATTERN = re.compile(r"\{[\s\S]*\}")
 UNAVAILABLE_PRIMARY_MODELS: set[str] = set()
 
 
@@ -151,6 +153,38 @@ def _extract_qwen_label(output_text: str) -> str:
     raise ValueError(f"Could not parse sentiment label from Qwen output: {output_text!r}")
 
 
+def _extract_qwen_probabilities(output_text: str) -> dict[str, float]:
+    candidate = output_text.strip()
+
+    if not candidate.startswith("{"):
+        match = QWEN_JSON_PATTERN.search(candidate)
+        if not match:
+            raise ValueError(f"Could not find JSON payload in Qwen output: {output_text!r}")
+        candidate = match.group(0)
+
+    payload = json.loads(candidate)
+    probabilities = {
+        "negative": max(0.0, float(payload["negative"])),
+        "neutral": max(0.0, float(payload["neutral"])),
+        "positive": max(0.0, float(payload["positive"])),
+    }
+    total = sum(probabilities.values())
+    if total <= 0:
+        raise ValueError(f"Qwen output probabilities sum to {total}: {output_text!r}")
+
+    return {
+        key: value / total
+        for key, value in probabilities.items()
+    }
+
+
+def _resolve_analyzer_mode() -> str:
+    mode = os.getenv("NEWS_SENTIMENT_ANALYZER", "auto").strip().lower()
+    if mode in {"auto", "qwen", "finbert"}:
+        return mode
+    return "auto"
+
+
 class QwenGgufSentimentAnalyzer:
     """Loads a local or Hugging Face GGUF file and runs local inference via llama.cpp."""
 
@@ -207,8 +241,17 @@ class QwenGgufSentimentAnalyzer:
 
         for text in texts:
             response = self._create_chat_completion(text)
-            label = _extract_qwen_label(response)
-            results.append(_result_from_label(label=label, model_name=self.model_name))
+            try:
+                probabilities = _extract_qwen_probabilities(response)
+                results.append(
+                    _result_from_probabilities(
+                        probabilities=probabilities,
+                        model_name=self.model_name,
+                    )
+                )
+            except Exception:
+                label = _extract_qwen_label(response)
+                results.append(_result_from_label(label=label, model_name=self.model_name))
 
         return results
 
@@ -320,6 +363,10 @@ def _get_preferred_analyzer(
     primary_model_source: str,
     fallback_model_source: str,
 ) -> QwenGgufSentimentAnalyzer | FinBertSentimentAnalyzer:
+    analyzer_mode = _resolve_analyzer_mode()
+    if analyzer_mode == "finbert":
+        return _get_fallback_analyzer(fallback_model_source)
+
     if primary_model_source in UNAVAILABLE_PRIMARY_MODELS:
         return _get_fallback_analyzer(fallback_model_source)
 

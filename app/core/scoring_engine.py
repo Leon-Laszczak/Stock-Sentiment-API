@@ -96,13 +96,18 @@ def technical_score(dfs):
             'error': str(exc),
         }
 
-def fundamental_score(ticker: str, ticker_obj: yf.Ticker | None = None):
+def fundamental_score(
+    ticker: str,
+    ticker_obj: yf.Ticker | None = None,
+    financials=None,
+):
     try:
         t = ticker_obj or yf.Ticker(ticker)
+        financials = financials if financials is not None else t.financials
 
-        revenue = analyze_revenue(t)
-        income = analyze_income_and_margins(t)
-        eps = analyze_eps(t)
+        revenue = analyze_revenue(financials)
+        income = analyze_income_and_margins(financials)
+        eps = analyze_eps(financials)
         predictions = analyze_predictions(t, ticker)
 
         score = (revenue + income + eps + predictions) / 4

@@ -7,6 +7,8 @@ from yfinance.exceptions import YFRateLimitError
 # ===== CACHE =====
 fund_cache = {}
 fund_last_fetch = {}
+price_target_cache = {}
+price_target_last_fetch = {}
 FUND_TTL = 60 * 60 * 24 # 1 day
 
 
@@ -44,19 +46,28 @@ def safe_recommendations(ticker_obj, ticker):
     return fund_cache.get(ticker, None)
 
 
-def safe_price_targets(ticker_obj):
+def safe_price_targets(ticker_obj, ticker):
+    now = time.time()
+
+    if ticker in price_target_cache and ticker in price_target_last_fetch:
+        if now - price_target_last_fetch[ticker] < FUND_TTL:
+            return price_target_cache[ticker]
+
     try:
-        return ticker_obj.analyst_price_targets
+        data = ticker_obj.analyst_price_targets
+        price_target_cache[ticker] = data
+        price_target_last_fetch[ticker] = now
+        return data
     except Exception as e:
         print(f"[ERROR] price targets: {e}")
-        return None
+        return price_target_cache.get(ticker, None)
 
 
 # ===== ANALYSIS =====
-def analyze_revenue(t: yf.Ticker):
+def analyze_revenue(financials: pd.DataFrame | None):
     try:
         score = 0
-        revenue = _get_row(t.financials, 'Total Revenue')
+        revenue = _get_row(financials, 'Total Revenue')
 
         if revenue is None or revenue.size < 2:
             return 0
@@ -70,17 +81,16 @@ def analyze_revenue(t: yf.Ticker):
         elif growth < 0:
             score -= 0.25
 
-        time.sleep(0.05)
         return tanh(score)
 
     except Exception:
         return 0
 
 
-def analyze_income_and_margins(t: yf.Ticker):
+def analyze_income_and_margins(financials: pd.DataFrame | None):
     try:
         score = 0
-        df = t.financials
+        df = financials
 
         net_income = _get_row(df, 'Net Income')
         gross_profit = _get_row(df, 'Gross Profit')
@@ -126,17 +136,16 @@ def analyze_income_and_margins(t: yf.Ticker):
         elif net_margin < 0:
             score -= 0.3
 
-        time.sleep(0.05)
         return tanh(score)
 
     except Exception:
         return 0
 
 
-def analyze_eps(t: yf.Ticker):
+def analyze_eps(financials: pd.DataFrame | None):
     try:
         score = 0
-        eps = _get_row(t.financials, 'Basic EPS')
+        eps = _get_row(financials, 'Basic EPS')
 
         if eps is None or eps.size < 2:
             return 0
@@ -148,7 +157,6 @@ def analyze_eps(t: yf.Ticker):
         elif growth < 0:
             score -= 0.2
 
-        time.sleep(0.05)
         return tanh(score)
 
     except Exception:
@@ -159,7 +167,7 @@ def analyze_predictions(t: yf.Ticker, ticker: str):
     score = 0
 
     signal = safe_recommendations(t, ticker)
-    pred = safe_price_targets(t)
+    pred = safe_price_targets(t, ticker)
 
     # price targets
     if pred:
@@ -191,6 +199,5 @@ def analyze_predictions(t: yf.Ticker, ticker: str):
                 score -= 0.3
         except Exception:
             pass
-            
-    time.sleep(0.05)
+
     return tanh(score)

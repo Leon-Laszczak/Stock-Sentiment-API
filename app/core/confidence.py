@@ -312,15 +312,21 @@ def compute_fundamental_confidence(
     ticker: str | None = None,
     ticker_obj: yf.Ticker | None = None,
     fund_score: float | None = None,
+    financials: pd.DataFrame | None = None,
+    balance_sheet: pd.DataFrame | None = None,
+    cash_flow: pd.DataFrame | None = None,
 ) -> float:
     if ticker_obj is None:
         if not ticker:
             return 0.1
         ticker_obj = yf.Ticker(ticker)
 
-    financials = ticker_obj.financials
-    balance_sheet = ticker_obj.balance_sheet
-    cash_flow = ticker_obj.cash_flow
+    if financials is None:
+        financials = ticker_obj.financials
+    if balance_sheet is None:
+        balance_sheet = ticker_obj.balance_sheet
+    if cash_flow is None:
+        cash_flow = ticker_obj.cash_flow
 
     statements_present = (
         int(_statement_present(financials))

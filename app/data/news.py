@@ -13,6 +13,7 @@ last_fetch = {}
 score_cache = {}
 score_last_fetch = {}
 CACHE_TTL = 60 * 60 * 4 # 4 hours
+MAX_NEWS_ARTICLES = 8
 
 def _empty_news_df() -> pd.DataFrame:
     return pd.DataFrame(columns=['title', 'summary', 'pub_date', 'provider'])
@@ -24,6 +25,37 @@ def _extract_provider_name(provider: Any) -> str:
     if provider is None:
         return ''
     return str(provider).strip()
+
+
+def _prepare_scored_news(
+    news: pd.DataFrame,
+    max_articles: int = MAX_NEWS_ARTICLES,
+) -> pd.DataFrame:
+    if news is None or news.empty:
+        return pd.DataFrame(columns=['title', 'summary', 'pub_date', 'provider', 'text'])
+
+    prepared = pd.DataFrame(index=news.index)
+    prepared['title'] = news['title'] if 'title' in news.columns else ''
+    prepared['summary'] = news['summary'] if 'summary' in news.columns else ''
+    prepared['provider'] = news['provider'] if 'provider' in news.columns else ''
+    prepared['pub_date'] = (
+        pd.to_datetime(news['pub_date'], errors='coerce', utc=True)
+        if 'pub_date' in news.columns
+        else pd.NaT
+    )
+
+    prepared['title'] = prepared['title'].fillna('').astype(str).str.strip()
+    prepared['summary'] = prepared['summary'].fillna('').astype(str).str.strip()
+    prepared['provider'] = prepared['provider'].fillna('').astype(str).str.strip()
+    prepared['text'] = (prepared['title'] + ' ' + prepared['summary']).str.strip()
+
+    prepared = prepared[prepared['text'] != '']
+    if prepared.empty:
+        return prepared
+
+    prepared = prepared.sort_values('pub_date', ascending=False, na_position='last')
+    prepared = prepared.drop_duplicates(subset=['text'], keep='first')
+    return prepared.head(max_articles).reset_index(drop=True)
 
 def fetch_news(ticker):
     now = time.time()
@@ -85,11 +117,8 @@ def score_news_dataframe(
             'latest_pub_date': None,
         }
 
-    title = news['title'] if 'title' in news.columns else pd.Series('', index=news.index)
-    summary = news['summary'] if 'summary' in news.columns else pd.Series('', index=news.index)
-    texts = (title.fillna('').astype(str).str.strip() + ' ' + summary.fillna('').astype(str).str.strip()).str.strip()
-    text_list = [t for t in texts.tolist() if t]
-    if not text_list:
+    prepared_news = _prepare_scored_news(news)
+    if prepared_news.empty:
         return {
             'score': 0.0,
             'has_data': False,
@@ -98,15 +127,14 @@ def score_news_dataframe(
             'latest_pub_date': None,
         }
 
-    providers = news['provider'] if 'provider' in news.columns else pd.Series('', index=news.index)
-    providers = providers.fillna('').astype(str).str.strip()
+    text_list = prepared_news['text'].tolist()
+    providers = prepared_news['provider']
     distinct_sources = int((providers[providers != '']).nunique())
 
     latest_pub_date = None
-    if 'pub_date' in news.columns:
-        pub_dates = pd.to_datetime(news['pub_date'], errors='coerce', utc=True).dropna()
-        if not pub_dates.empty:
-            latest_pub_date = pub_dates.max().isoformat()
+    pub_dates = prepared_news['pub_date'].dropna()
+    if not pub_dates.empty:
+        latest_pub_date = pub_dates.max().isoformat()
 
     tier = 'free'
     score,results = predict_sentiment_scores(text_list, tier=tier)
@@ -118,16 +146,29 @@ def score_news_dataframe(
                 'article_count': len(text_list),
                 'distinct_sources': distinct_sources,
                 'latest_pub_date': latest_pub_date,
+                'fetched_article_count': int(len(news)),
                 'error': r['error'],
             }
 
-    components = {str(idx) : {'score' : r['score'],'pub_date' : str(pd.to_datetime(news['pub_date'], errors='coerce', utc=True)[idx]),'source' : providers[idx]} for (idx,r) in enumerate(results)} 
+    component_pub_dates = prepared_news['pub_date'].tolist()
+    component_sources = providers.tolist()
+    components = {
+        str(idx): {
+            'score': result['score'],
+            'pub_date': pub_date.isoformat() if not pd.isna(pub_date) else None,
+            'source': source,
+        }
+        for idx, (result, pub_date, source) in enumerate(
+            zip(results, component_pub_dates, component_sources)
+        )
+    }
     return {
         'score': score,
         'has_data': True,
         'article_count': len(text_list),
         'distinct_sources': distinct_sources,
         'latest_pub_date': latest_pub_date,
+        'fetched_article_count': int(len(news)),
         'components' : components
     }
 

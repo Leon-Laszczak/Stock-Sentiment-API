@@ -90,6 +90,69 @@ def _backfill_history_with_yfinance(ticker: str, df: pd.DataFrame, min_rows: int
         return _trim_history(merged, keep_rows=max(min_rows, TECHNICAL_HISTORY_ROWS))
     except Exception:
         return _trim_history(df, keep_rows=max(min_rows, TECHNICAL_HISTORY_ROWS))
+
+
+def _fetch_alpha_vantage_history(
+    session: requests.Session,
+    ticker: str,
+    api_key: str | None,
+    *,
+    function: str,
+    series_key: str,
+    period: str,
+    interval: str,
+    context_label: str,
+    extra_params: dict[str, str] | None = None,
+) -> pd.DataFrame:
+    if not api_key:
+        raise RuntimeError('ALPHA_VANTAGE_API_KEY is not configured.')
+
+    params = {
+        'apikey': api_key,
+        'symbol': ticker,
+        'function': function,
+    }
+    if extra_params:
+        params.update(extra_params)
+
+    response = session.get(
+        'https://www.alphavantage.co/query',
+        params=params,
+        timeout=15,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    series = payload.get(series_key)
+
+    if not series:
+        details = payload.get('Note') or payload.get('Error Message') or payload.get('Information')
+        if details:
+            raise RuntimeError(f'Alpha Vantage error for {context_label}: {details}')
+        raise RuntimeError(f'Alpha Vantage did not return {context_label} data.')
+
+    df = pd.DataFrame.from_dict(series, orient='index')
+    df = df.rename(columns={
+        '1. open': 'Open',
+        '2. high': 'High',
+        '3. low': 'Low',
+        '4. close': 'Close',
+        '5. volume': 'Volume',
+    })
+    expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
+    missing_cols = [col for col in expected_cols if col not in df.columns]
+    if missing_cols:
+        raise RuntimeError(f'Missing expected Alpha Vantage columns for {context_label}: {missing_cols}')
+
+    df = df[expected_cols].apply(pd.to_numeric, errors='coerce')
+    df.index = pd.to_datetime(df.index, errors='coerce')
+    df = df.sort_index().dropna(subset=['Close'])
+    return _backfill_history_with_yfinance(
+        ticker=ticker,
+        df=df,
+        min_rows=TECHNICAL_HISTORY_ROWS,
+        period=period,
+        interval=interval,
+    )
     
 def _fetch_stock_data(ticker, period="max", interval="1d", keep_rows: int = TECHNICAL_HISTORY_ROWS):
     now = time.time()
@@ -137,170 +200,79 @@ def fetch_stock_data(ticker):
 
     dfs = []
     alpha_vantage_api_key = _require_env('ALPHA_VANTAGE_API_KEY')
-    try:
-        response = requests.get(
-            'https://www.alphavantage.co/query',
-            params={
-                'apikey': alpha_vantage_api_key,
-                'symbol': ticker,
-                'function': 'TIME_SERIES_DAILY',
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        response = payload.get('Time Series (Daily)')
-
-        if not response:
-            details = payload.get('Note') or payload.get('Error Message') or payload.get('Information')
-            if details:
-                raise RuntimeError(f'Alpha Vantage error: {details}')
-            raise RuntimeError('Alpha Vantage did not return daily time series data.')
-
-        df = pd.DataFrame.from_dict(response, orient='index')
-        df = df.rename(columns={
-            '1. open': 'Open',
-            '2. high': 'High',
-            '3. low': 'Low',
-            '4. close': 'Close',
-            '5. volume': 'Volume',
-        })
-        expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        missing_cols = [col for col in expected_cols if col not in df.columns]
-        if missing_cols:
-            raise RuntimeError(f'Missing expected Alpha Vantage columns: {missing_cols}')
-
-        df = df[expected_cols].apply(pd.to_numeric, errors='coerce')
-        df.index = pd.to_datetime(df.index, errors='coerce')
-        df = df.sort_index().dropna(subset=['Close'])
-        df = _backfill_history_with_yfinance(
-            ticker=ticker,
-            df=df,
-            min_rows=TECHNICAL_HISTORY_ROWS,
-            period=FALLBACK_PERIOD_BY_INTERVAL['1d'],
-            interval='1d',
-        )
-        dfs.append(df)
-    except:
-        dfs.append(
-            _fetch_stock_data(
-                ticker=ticker,
-                period=FALLBACK_PERIOD_BY_INTERVAL['1d'],
-                interval='1d',
-            )
-        )
-    
-    for interval in TIME_INTERVALS:
-        yf_interval = _alpha_vantage_to_yfinance_interval(interval)
-        fallback_period = FALLBACK_PERIOD_BY_INTERVAL.get(yf_interval, '60d')
+    with requests.Session() as session:
         try:
-            response = requests.get(
-                'https://www.alphavantage.co/query',
-                params={
-                    'apikey': alpha_vantage_api_key,
-                    'symbol': ticker,
-                    'function': 'TIME_SERIES_INTRADAY',
-                    'interval' : interval,
-                    'outputsize' : 'full'
-                },
-                timeout=15,
+            dfs.append(
+                _fetch_alpha_vantage_history(
+                    session=session,
+                    ticker=ticker,
+                    api_key=alpha_vantage_api_key,
+                    function='TIME_SERIES_DAILY',
+                    series_key='Time Series (Daily)',
+                    period=FALLBACK_PERIOD_BY_INTERVAL['1d'],
+                    interval='1d',
+                    context_label='daily',
+                )
             )
-            response.raise_for_status()
-            payload = response.json()
-            response = payload.get(f'Time Series ({interval})')
-
-            if not response:
-                details = payload.get('Note') or payload.get('Error Message') or payload.get('Information')
-                if details:
-                    raise RuntimeError(f'Alpha Vantage error for {interval}: {details}')
-                raise RuntimeError(f'Alpha Vantage did not return intraday time series data for {interval}.')
-
-            df = pd.DataFrame.from_dict(response, orient='index')
-            df = df.rename(columns={
-                '1. open': 'Open',
-                '2. high': 'High',
-                '3. low': 'Low',
-                '4. close': 'Close',
-                '5. volume': 'Volume',
-            })
-            expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-            missing_cols = [col for col in expected_cols if col not in df.columns]
-            if missing_cols:
-                raise RuntimeError(f'Missing expected Alpha Vantage columns: {missing_cols}')
-
-            df = df[expected_cols].apply(pd.to_numeric, errors='coerce')
-            df.index = pd.to_datetime(df.index, errors='coerce')
-            df = df.sort_index().dropna(subset=['Close'])
-
-            df = _backfill_history_with_yfinance(
-                ticker=ticker,
-                df=df,
-                min_rows=TECHNICAL_HISTORY_ROWS,
-                period=fallback_period,
-                interval=yf_interval,
-            )
-            dfs.append(df)
-        except:
+        except Exception:
             dfs.append(
                 _fetch_stock_data(
                     ticker=ticker,
-                    period=fallback_period,
-                    interval=yf_interval,
+                    period=FALLBACK_PERIOD_BY_INTERVAL['1d'],
+                    interval='1d',
                 )
             )
-        
-    try:
-        response = requests.get(
-            'https://www.alphavantage.co/query',
-            params={
-                'apikey': alpha_vantage_api_key,
-                'symbol': ticker,
-                'function': 'TIME_SERIES_WEEKLY',
-            },
-            timeout=15,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        response = payload.get('Weekly Time Series')
 
-        if not response:
-            details = payload.get('Note') or payload.get('Error Message') or payload.get('Information')
-            if details:
-                raise RuntimeError(f'Alpha Vantage error: {details}')
-            raise RuntimeError('Alpha Vantage did not return daily time series data.')
+        for interval in TIME_INTERVALS:
+            yf_interval = _alpha_vantage_to_yfinance_interval(interval)
+            fallback_period = FALLBACK_PERIOD_BY_INTERVAL.get(yf_interval, '60d')
+            try:
+                dfs.append(
+                    _fetch_alpha_vantage_history(
+                        session=session,
+                        ticker=ticker,
+                        api_key=alpha_vantage_api_key,
+                        function='TIME_SERIES_INTRADAY',
+                        series_key=f'Time Series ({interval})',
+                        period=fallback_period,
+                        interval=yf_interval,
+                        context_label=f'intraday {interval}',
+                        extra_params={
+                            'interval': interval,
+                            'outputsize': 'full',
+                        },
+                    )
+                )
+            except Exception:
+                dfs.append(
+                    _fetch_stock_data(
+                        ticker=ticker,
+                        period=fallback_period,
+                        interval=yf_interval,
+                    )
+                )
 
-        df = pd.DataFrame.from_dict(response, orient='index')
-        df = df.rename(columns={
-            '1. open': 'Open',
-            '2. high': 'High',
-            '3. low': 'Low',
-            '4. close': 'Close',
-            '5. volume': 'Volume',
-        })
-        expected_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        missing_cols = [col for col in expected_cols if col not in df.columns]
-        if missing_cols:
-            raise RuntimeError(f'Missing expected Alpha Vantage columns: {missing_cols}')
-
-        df = df[expected_cols].apply(pd.to_numeric, errors='coerce')
-        df.index = pd.to_datetime(df.index, errors='coerce')
-        df = df.sort_index().dropna(subset=['Close'])
-        df = _backfill_history_with_yfinance(
-            ticker=ticker,
-            df=df,
-            min_rows=TECHNICAL_HISTORY_ROWS,
-            period=FALLBACK_PERIOD_BY_INTERVAL['1wk'],
-            interval='1wk',
-        )
-        dfs.append(df)
-    except:
-        dfs.append(
-            _fetch_stock_data(
-                ticker=ticker,
-                period=FALLBACK_PERIOD_BY_INTERVAL['1wk'],
-                interval='1wk',
+        try:
+            dfs.append(
+                _fetch_alpha_vantage_history(
+                    session=session,
+                    ticker=ticker,
+                    api_key=alpha_vantage_api_key,
+                    function='TIME_SERIES_WEEKLY',
+                    series_key='Weekly Time Series',
+                    period=FALLBACK_PERIOD_BY_INTERVAL['1wk'],
+                    interval='1wk',
+                    context_label='weekly',
+                )
             )
-        )
+        except Exception:
+            dfs.append(
+                _fetch_stock_data(
+                    ticker=ticker,
+                    period=FALLBACK_PERIOD_BY_INTERVAL['1wk'],
+                    interval='1wk',
+                )
+            )
             
     market_cache[ticker_key] = dfs
     market_last_fetch[ticker_key] = now

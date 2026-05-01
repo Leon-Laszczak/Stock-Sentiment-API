@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import time
 
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
@@ -16,17 +17,47 @@ from app.core.scoring_engine import technical_score,fundamental_score,get_final_
 from app.data.news import score_news_for_ticker
 
 router = APIRouter()
+FUNDAMENTAL_CACHE_TTL = 60 * 60 * 24
+fundamental_cache: dict[str, tuple[dict, float]] = {}
+fundamental_last_fetch: dict[str, float] = {}
+
+
+def _safe_ticker_frame(ticker_obj: yf.Ticker, attr: str):
+    try:
+        return getattr(ticker_obj, attr)
+    except Exception:
+        return None
 
 
 def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
-    ticker_obj = yf.Ticker(ticker)
-    fundamentals = fundamental_score(ticker, ticker_obj=ticker_obj)
+    ticker_key = ticker.upper()
+    now = time.time()
+
+    if ticker_key in fundamental_cache and ticker_key in fundamental_last_fetch:
+        if now - fundamental_last_fetch[ticker_key] < FUNDAMENTAL_CACHE_TTL:
+            return fundamental_cache[ticker_key]
+
+    ticker_obj = yf.Ticker(ticker_key)
+    financials = _safe_ticker_frame(ticker_obj, "financials")
+    balance_sheet = _safe_ticker_frame(ticker_obj, "balance_sheet")
+    cash_flow = _safe_ticker_frame(ticker_obj, "cash_flow")
+    fundamentals = fundamental_score(
+        ticker_key,
+        ticker_obj=ticker_obj,
+        financials=financials,
+    )
     confidence = compute_fundamental_confidence(
-        ticker=ticker,
+        ticker=ticker_key,
         ticker_obj=ticker_obj,
         fund_score=fundamentals.get("Score"),
+        financials=financials,
+        balance_sheet=balance_sheet,
+        cash_flow=cash_flow,
     )
-    return fundamentals, confidence
+    result = (fundamentals, confidence)
+    fundamental_cache[ticker_key] = result
+    fundamental_last_fetch[ticker_key] = now
+    return result
 
 @router.get("/{ticker}")
 def get_sentiment(ticker: str,):
