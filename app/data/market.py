@@ -2,8 +2,6 @@ import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
 import requests
-import dotenv
-import os
 
 import pandas as pd
 import pandas_ta as ta
@@ -12,7 +10,8 @@ from functools import lru_cache
 
 import time
 
-from app.core.helpers import _normalize
+from app.core.helpers import _normalize, _require_env
+
 market_cache = {}
 market_last_fetch = {}
 yf_cache = {}
@@ -51,15 +50,6 @@ def _trim_history(df: pd.DataFrame, keep_rows: int = TECHNICAL_HISTORY_ROWS) -> 
     if df is None or df.empty:
         return df
     return df.sort_index().tail(keep_rows).copy()
-
-@lru_cache(maxsize=None)
-def _require_env(key : str):
-    dotenv.load_dotenv('.env')
-    try:
-        value = os.environ[key]
-        return value
-    except KeyError:
-        return None
     
 def _backfill_history_with_yfinance(ticker: str, df: pd.DataFrame, min_rows: int = TECHNICAL_HISTORY_ROWS,period = 'max', interval = '1d') -> pd.DataFrame:
     """Backfill premium series with free Yahoo history when Alpha Vantage is too short."""
