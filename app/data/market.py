@@ -2,11 +2,11 @@ import yfinance as yf
 from yfinance.exceptions import YFRateLimitError
 
 import requests
+from fastapi import HTTPException
 
 import pandas as pd
 import pandas_ta as ta
 from math import tanh
-from functools import lru_cache
 
 import time
 
@@ -178,7 +178,7 @@ def _fetch_stock_data(ticker, period="max", interval="1d", keep_rows: int = TECH
         print("[INFO] Using cached fallback")
         return yf_cache[key]
 
-    return {"error": "Data unavailable (rate limited or failed)"}
+    raise HTTPException(status_code=503, detail=f"Failed to fetch stock data for {ticker} after {MAX_RETRIES} attempts.")
   
 def fetch_stock_data(ticker):
     now = time.time()
@@ -192,8 +192,8 @@ def fetch_stock_data(ticker):
     alpha_vantage_api_key = _require_env('ALPHA_VANTAGE_API_KEY')
     with requests.Session() as session:
         try:
-            dfs.append(
-                _fetch_alpha_vantage_history(
+            
+            df = _fetch_alpha_vantage_history(
                     session=session,
                     ticker=ticker,
                     api_key=alpha_vantage_api_key,
@@ -203,7 +203,10 @@ def fetch_stock_data(ticker):
                     interval='1d',
                     context_label='daily',
                 )
-            )
+
+            if df is None or df.empty:
+                raise HTTPException(status_code=503, detail=f"No market data available for {ticker}.")
+            dfs.append(df)
         except Exception:
             dfs.append(
                 _fetch_stock_data(
@@ -217,8 +220,8 @@ def fetch_stock_data(ticker):
             yf_interval = _alpha_vantage_to_yfinance_interval(interval)
             fallback_period = FALLBACK_PERIOD_BY_INTERVAL.get(yf_interval, '60d')
             try:
-                dfs.append(
-                    _fetch_alpha_vantage_history(
+                
+                df = _fetch_alpha_vantage_history(
                         session=session,
                         ticker=ticker,
                         api_key=alpha_vantage_api_key,
@@ -232,7 +235,9 @@ def fetch_stock_data(ticker):
                             'outputsize': 'full',
                         },
                     )
-                )
+                if df is None or df.empty:
+                    raise HTTPException(status_code=503, detail=f"No market data available for {ticker} at interval {interval}.")
+                dfs.append(df)
             except Exception:
                 dfs.append(
                     _fetch_stock_data(
@@ -243,8 +248,8 @@ def fetch_stock_data(ticker):
                 )
 
         try:
-            dfs.append(
-                _fetch_alpha_vantage_history(
+            
+            df = _fetch_alpha_vantage_history(
                     session=session,
                     ticker=ticker,
                     api_key=alpha_vantage_api_key,
@@ -254,7 +259,9 @@ def fetch_stock_data(ticker):
                     interval='1wk',
                     context_label='weekly',
                 )
-            )
+            if df is None or df.empty:
+                raise HTTPException(status_code=503, detail=f"No market data available for {ticker} at weekly interval.")
+            dfs.append(df)
         except Exception:
             dfs.append(
                 _fetch_stock_data(
