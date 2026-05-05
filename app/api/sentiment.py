@@ -59,13 +59,13 @@ def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
     fundamental_last_fetch[ticker_key] = now
     return result
 
-@router.get("/{ticker}")
-def get_sentiment(ticker: str,):
+@router.get("/{ticker}/{data_mode}")
+def get_sentiment(ticker: str, data_mode: str = "fast"):
     """Endpoint to get a sentiment score for a given stock ticker."""
     with ThreadPoolExecutor(max_workers=3) as executor:
         market_future = executor.submit(fetch_stock_data, ticker)
         fund_future = executor.submit(_load_fundamentals_with_confidence, ticker)
-        news_future = executor.submit(score_news_for_ticker, ticker)
+        news_future = executor.submit(score_news_for_ticker, ticker, data_mode=data_mode)
 
         data = market_future.result()
     

@@ -277,7 +277,7 @@ def score_news_for_ticker(
         if data_mode == 'fast':
             news = fetch_news(ticker)
         else:
-            news = NewsParser().get_news(ticker)
+            news = NewsParser().get_news(ticker) 
             
         result = score_news_dataframe(news)
         if 'error' in result:
