@@ -4,7 +4,6 @@ import time
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
 import numpy as np
-import yfinance as yf
 
 from app.core.confidence import (
     compute_fundamental_confidence,
@@ -14,19 +13,13 @@ from app.core.confidence import (
 )
 from app.data.market import fetch_stock_data,compute_technical
 from app.core.scoring_engine import technical_score,fundamental_score,get_final_score
+from app.data.fundamentals import MassiveTicker
 from app.data.news import score_news_for_ticker
 
 router = APIRouter()
 FUNDAMENTAL_CACHE_TTL = 60 * 60 * 24
 fundamental_cache: dict[str, tuple[dict, float]] = {}
 fundamental_last_fetch: dict[str, float] = {}
-
-
-def _safe_ticker_frame(ticker_obj: yf.Ticker, attr: str):
-    try:
-        return getattr(ticker_obj, attr)
-    except Exception:
-        return None
 
 
 def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
@@ -37,22 +30,14 @@ def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
         if now - fundamental_last_fetch[ticker_key] < FUNDAMENTAL_CACHE_TTL:
             return fundamental_cache[ticker_key]
 
-    ticker_obj = yf.Ticker(ticker_key)
-    financials = _safe_ticker_frame(ticker_obj, "financials")
-    balance_sheet = _safe_ticker_frame(ticker_obj, "balance_sheet")
-    cash_flow = _safe_ticker_frame(ticker_obj, "cash_flow")
+    fundamentals_ticker = MassiveTicker(ticker_key)
     fundamentals = fundamental_score(
         ticker_key,
-        ticker_obj=ticker_obj,
-        financials=financials,
+        fundamentals_ticker=fundamentals_ticker,
     )
     confidence = compute_fundamental_confidence(
-        ticker=ticker_key,
-        ticker_obj=ticker_obj,
+        fundamentals_ticker=fundamentals_ticker,
         fund_score=fundamentals.get("Score"),
-        financials=financials,
-        balance_sheet=balance_sheet,
-        cash_flow=cash_flow,
     )
     result = (fundamentals, confidence)
     fundamental_cache[ticker_key] = result
@@ -60,8 +45,10 @@ def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
     return result
 
 @router.get("/{ticker}/{data_mode}")
-def get_sentiment(ticker: str, data_mode: str = "fast"):
+def get_sentiment(ticker: str, data_mode: str):
     """Endpoint to get a sentiment score for a given stock ticker."""
+    if data_mode not in ['fast', 'full']:
+        raise HTTPException(status_code=400, detail="Invalid data_mode. Must be 'fast' or 'full'.")
     with ThreadPoolExecutor(max_workers=3) as executor:
         market_future = executor.submit(fetch_stock_data, ticker)
         fund_future = executor.submit(_load_fundamentals_with_confidence, ticker)

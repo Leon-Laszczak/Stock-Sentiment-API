@@ -5,6 +5,8 @@ from typing import Any
 import pandas as pd
 import yfinance as yf
 
+from app.data.fundamentals import MassiveTicker
+
 TECH_WEIGHT = 0.3
 NEWS_WEIGHT = 0.3
 FUND_WEIGHT = 0.4
@@ -79,6 +81,28 @@ def _latest_statement_date(dfs: list[pd.DataFrame | None]) -> pd.Timestamp | Non
         if latest is None or current_max > latest:
             latest = current_max
     return latest
+
+
+def _latest_frame_date(df: pd.DataFrame | None, *date_columns: str) -> pd.Timestamp | None:
+    if not _statement_present(df):
+        return None
+
+    for column in date_columns:
+        if column not in df.columns:
+            continue
+
+        dates = pd.to_datetime(df[column], errors="coerce", utc=True)
+        if hasattr(dates, "isna") and dates.isna().all():
+            continue
+        return dates.max()
+
+    return _latest_statement_date([df])
+
+
+def _has_any_column(df: pd.DataFrame | None, *labels: str) -> bool:
+    if not _statement_present(df):
+        return False
+    return any(label in df.columns for label in labels)
 
 
 def compute_interval_technical_confidence(df: pd.DataFrame, interval_score: float) -> float:
@@ -310,12 +334,111 @@ def compute_technical_confidence_breakdown(
 
 def compute_fundamental_confidence(
     ticker: str | None = None,
+    fundamentals_ticker: MassiveTicker | None = None,
     ticker_obj: yf.Ticker | None = None,
     fund_score: float | None = None,
+    income_statement: pd.DataFrame | None = None,
+    ratios: pd.DataFrame | None = None,
+    consensus: pd.DataFrame | None = None,
     financials: pd.DataFrame | None = None,
     balance_sheet: pd.DataFrame | None = None,
     cash_flow: pd.DataFrame | None = None,
 ) -> float:
+    use_legacy_yfinance = any(
+        value is not None
+        for value in (ticker_obj, financials, balance_sheet, cash_flow)
+    )
+
+    if not use_legacy_yfinance:
+        if fundamentals_ticker is None and ticker:
+            fundamentals_ticker = MassiveTicker(ticker)
+
+        if fundamentals_ticker is not None:
+            if income_statement is None:
+                income_statement = fundamentals_ticker.income_statement
+            if ratios is None:
+                ratios = fundamentals_ticker.ratios
+            if consensus is None:
+                consensus = fundamentals_ticker.consensus
+
+        sources_present = (
+            int(_statement_present(income_statement))
+            + int(_statement_present(ratios))
+            + int(_statement_present(consensus))
+        ) / 3.0
+
+        total = 0
+        available = 0
+
+        if _statement_present(income_statement):
+            total += 5
+            available += int(_has_any_column(income_statement, "revenue"))
+            available += int(
+                _has_any_column(
+                    income_statement,
+                    "net_income_loss_attributable_common_shareholders",
+                    "consolidated_net_income_loss",
+                )
+            )
+            available += int(_has_any_column(income_statement, "gross_profit"))
+            available += int(_has_any_column(income_statement, "operating_income"))
+            available += int(
+                _has_any_column(
+                    income_statement,
+                    "basic_earnings_per_share",
+                    "diluted_earnings_per_share",
+                )
+            )
+
+        if _statement_present(ratios):
+            total += 1
+            available += int(_has_any_column(ratios, "price"))
+
+        if _statement_present(consensus):
+            total += 2
+            available += int(_has_any_column(consensus, "consensus_price_target"))
+            available += int(
+                _has_any_column(
+                    consensus,
+                    "strong_buy_ratings",
+                    "buy_ratings",
+                    "sell_ratings",
+                    "strong_sell_ratings",
+                    "consensus_rating",
+                )
+            )
+
+        coverage = (available / total) if total > 0 else 0.0
+
+        recency_score = 0.5
+        latest_dates = [
+            _latest_frame_date(income_statement, "period_end", "fiscal_period", "filing_date"),
+            _latest_frame_date(ratios, "date", "period_end"),
+            _latest_frame_date(consensus, "date", "updated", "published_utc"),
+        ]
+        latest_dates = [date for date in latest_dates if date is not None]
+        if latest_dates:
+            latest = max(latest_dates)
+            days_old = (pd.Timestamp.now(tz="UTC") - latest).days
+            if days_old <= 180:
+                recency_score = 1.0
+            elif days_old <= 365:
+                recency_score = 0.8
+            elif days_old <= 730:
+                recency_score = 0.5
+            else:
+                recency_score = 0.25
+
+        signal_strength = _clip01(abs(fund_score)) if fund_score is not None else 0.0
+        confidence = (
+            0.10
+            + 0.35 * signal_strength
+            + 0.25 * coverage
+            + 0.20 * sources_present
+            + 0.10 * recency_score
+        )
+        return _clip01(confidence)
+
     if ticker_obj is None:
         if not ticker:
             return 0.1
