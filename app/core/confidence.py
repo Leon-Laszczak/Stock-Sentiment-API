@@ -7,9 +7,10 @@ import yfinance as yf
 
 from app.data.fundamentals import MassiveTicker
 
-TECH_WEIGHT = 0.3
-NEWS_WEIGHT = 0.3
-FUND_WEIGHT = 0.4
+TECH_WEIGHT = 0.25
+NEWS_WEIGHT = 0.2
+FUND_WEIGHT = 0.35
+SECTOR_WEIGHT = 0.2
 
 
 def _clip01(value: float) -> float:
@@ -564,11 +565,134 @@ def compute_news_confidence(
     return _clip01(confidence)
 
 
+def compute_sector_confidence(
+    sector_score: float | None = None,
+    sector_payload: dict[str, Any] | None = None,
+    news_payload: dict[str, Any] | None = None,
+    sector: str | None = None,
+) -> float:
+    if isinstance(sector_payload, dict) and sector_payload.get("error"):
+        return 0.0
+
+    if sector_score is None and isinstance(sector_payload, dict):
+        sector_score = sector_payload.get("Score")
+
+    base_components = ["Trend", "Relative Strength", "News"]
+    premium_components = ["Momentum", "Volatility", "Rotation"]
+    is_premium = isinstance(sector_payload, dict) and any(
+        key in sector_payload for key in premium_components
+    )
+    expected_components = base_components + premium_components if is_premium else base_components
+
+    present_components = [
+        key
+        for key in expected_components
+        if isinstance(sector_payload, dict) and key in sector_payload
+    ]
+    component_breadth = (
+        len(present_components) / len(expected_components)
+        if expected_components
+        else 0.0
+    )
+
+    component_scores: list[float] = []
+    non_news_scores: list[float] = []
+    for key in present_components:
+        value = sector_payload.get(key) if isinstance(sector_payload, dict) else None
+        try:
+            numeric_value = float(value)
+        except Exception:
+            continue
+        component_scores.append(numeric_value)
+        if key != "News":
+            non_news_scores.append(numeric_value)
+
+    if sector_score is None:
+        try:
+            sector_score = _weighted_avg(component_scores, [1.0] * len(component_scores))
+        except Exception:
+            sector_score = 0.0
+
+    signal_strength = _clip01(abs(sector_score)) if sector_score is not None else 0.0
+
+    component_resolution = 0.0
+    if component_scores:
+        component_resolution = sum(
+            _clip01(abs(score) / 0.35)
+            for score in component_scores
+        ) / len(component_scores)
+
+    overall_direction = _score_direction(sector_score, threshold=0.04)
+    if overall_direction == 0 and component_scores:
+        overall_direction = _score_direction(
+            _weighted_avg(component_scores, [1.0] * len(component_scores)),
+            threshold=0.04,
+        )
+
+    decisive_components = 0
+    agreeing_components = 0
+    for score in component_scores:
+        direction = _score_direction(score, threshold=0.08)
+        if direction == 0:
+            continue
+        decisive_components += 1
+        if overall_direction == 0 or direction == overall_direction:
+            agreeing_components += 1
+
+    cross_component_agreement = (
+        agreeing_components / decisive_components
+        if decisive_components > 0
+        else 0.5
+    )
+
+    market_component_count = len(expected_components) - 1 if expected_components else 0
+    market_coverage = (
+        len(non_news_scores) / market_component_count
+        if market_component_count > 0
+        else 0.0
+    )
+
+    if news_payload is None and isinstance(sector_payload, dict):
+        maybe_news_payload = sector_payload.get("News")
+        if isinstance(maybe_news_payload, dict):
+            news_payload = maybe_news_payload
+
+    news_confidence = 0.0
+    if isinstance(news_payload, dict):
+        news_confidence = compute_news_confidence(
+            news_score=news_payload.get("score"),
+            has_data=bool(news_payload.get("has_data")),
+            article_count=news_payload.get("article_count"),
+            distinct_sources=news_payload.get("distinct_sources"),
+            latest_pub_date=news_payload.get("latest_pub_date"),
+        )
+    elif isinstance(sector_payload, dict) and "News" in sector_payload:
+        news_confidence = 0.35
+
+    sector_presence = 1.0 if sector else 0.5 if present_components else 0.0
+    data_quality = (
+        0.55 * market_coverage
+        + 0.30 * news_confidence
+        + 0.15 * sector_presence
+    )
+
+    confidence = (
+        0.05
+        + 0.25 * signal_strength
+        + 0.20 * component_breadth
+        + 0.15 * component_resolution
+        + 0.15 * cross_component_agreement
+        + 0.20 * data_quality
+    )
+    return _clip01(confidence)
+
+
 def compute_overall_confidence(components: dict[str, float | None]) -> float:
     weights = {
         "technical": TECH_WEIGHT,
         "news": NEWS_WEIGHT,
         "fundamentals": FUND_WEIGHT,
+        "sector": SECTOR_WEIGHT,
     }
 
     total_weight = 0.0

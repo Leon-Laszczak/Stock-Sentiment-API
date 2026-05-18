@@ -9,17 +9,31 @@ from app.core.confidence import (
     compute_fundamental_confidence,
     compute_news_confidence,
     compute_overall_confidence,
+    compute_sector_confidence,
     compute_technical_confidence_breakdown,
 )
 from app.data.market import fetch_stock_data,compute_technical
 from app.core.scoring_engine import technical_score,fundamental_score,get_final_score
 from app.data.fundamentals import MassiveTicker
 from app.data.news import score_news_for_ticker
+from app.data.sector import get_ticker_sector, score_sector, score_sector_premium
 
 router = APIRouter()
 FUNDAMENTAL_CACHE_TTL = 60 * 60 * 24
 fundamental_cache: dict[str, tuple[dict, float]] = {}
 fundamental_last_fetch: dict[str, float] = {}
+
+
+def _neutral_sector_payload(error: str | None = None) -> dict:
+    payload = {
+        "Score": 0.0,
+        "Trend": 0.0,
+        "Relative Strength": 0.0,
+        "News": 0.0,
+    }
+    if error:
+        payload["error"] = error
+    return payload
 
 
 def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
@@ -44,15 +58,39 @@ def _load_fundamentals_with_confidence(ticker: str) -> tuple[dict, float]:
     fundamental_last_fetch[ticker_key] = now
     return result
 
+
+def _load_sector_with_confidence(ticker: str, data_mode: str) -> tuple[dict, float]:
+    try:
+        sector_name = get_ticker_sector(ticker)
+        sector_payload = (
+            score_sector_premium(ticker, sector=sector_name)
+            if data_mode == "full"
+            else score_sector(ticker, sector=sector_name)
+        )
+    except Exception as exc:
+        sector_payload = _neutral_sector_payload(error=str(exc))
+        sector_name = None
+
+    if not isinstance(sector_payload, dict):
+        sector_payload = _neutral_sector_payload(error="Invalid sector payload.")
+
+    sector_confidence = compute_sector_confidence(
+        sector_score=sector_payload.get("Score"),
+        sector_payload=sector_payload,
+        sector=sector_name,
+    )
+    return sector_payload, sector_confidence
+
 @router.get("/{ticker}/{data_mode}")
 def get_sentiment(ticker: str, data_mode: str):
     """Endpoint to get a sentiment score for a given stock ticker."""
     if data_mode not in ['fast', 'full']:
         raise HTTPException(status_code=400, detail="Invalid data_mode. Must be 'fast' or 'full'.")
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         market_future = executor.submit(fetch_stock_data, ticker)
         fund_future = executor.submit(_load_fundamentals_with_confidence, ticker)
         news_future = executor.submit(score_news_for_ticker, ticker, data_mode=data_mode)
+        sector_future = executor.submit(_load_sector_with_confidence, ticker, data_mode)
 
         data = market_future.result()
     
@@ -70,6 +108,7 @@ def get_sentiment(ticker: str, data_mode: str):
 
         fund, fund_confidence = fund_future.result()
         news = news_future.result()
+        sector, sector_confidence = sector_future.result()
 
     overall_sentiment = get_final_score(tech['Score'], news['score'], fund['Score'])
     technical_confidence = compute_technical_confidence_breakdown(
@@ -89,6 +128,7 @@ def get_sentiment(ticker: str, data_mode: str):
             "technical": technical_confidence.get("Overall"),
             "fundamentals": fund_confidence,
             "news": news_confidence,
+            "sector": sector_confidence,
         }
     )
 
@@ -98,13 +138,15 @@ def get_sentiment(ticker: str, data_mode: str):
         'Components' : {
             'Technical' : tech,
             'Fundamental' : fund,
-            'News' : news
+            'News' : news,
+            'Sector': sector,
         },
         'Confidence': {
             'Overall': overall_confidence,
             'Technical': technical_confidence,
             'Fundamental': fund_confidence,
             'News': news_confidence,
+            'Sector': sector_confidence,
         }
     }
     return jsonable_encoder(payload, custom_encoder={np.generic: lambda value: value.item()})
